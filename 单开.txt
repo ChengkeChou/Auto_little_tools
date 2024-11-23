@@ -1,0 +1,126 @@
+# 设置检查GPU温度的间隔（秒）  
+$interval = 10  
+
+# 定义SMTP服务器的地址和端口
+$smtpServer = "smtp.163.com"
+$smtpPort = 25
+
+# 定义发件人邮箱地址和授权码
+$from = "18973481833@163.com"
+$authorizationCode = "YBBVGRGLYSKNPLYS"
+
+# 定义收件人邮箱地址
+$to = "mrrskl@outlook.com"
+
+# 定义邮件主题
+$subject = "High Temperature Warning"
+
+# 定义邮件正文
+$body = "GPU温度过高，已终止程序，请尽快处理"
+
+# 创建SMTP客户端对象
+$smtp = New-Object System.Net.Mail.SmtpClient($smtpServer, $smtpPort)
+
+# 设置SMTP服务器认证
+$smtp.Credentials = New-Object System.Net.NetworkCredential($from, $authorizationCode)
+
+# 创建邮件对象
+$mail = New-Object System.Net.Mail.MailMessage($from, $to,$subject, $body)  
+# 初始化循环计数器
+$n = 0
+ 
+# 设置GPU温度阈值（摄氏度）  
+$tempThreshold = 72  
+
+# 设置gmx mdrun命令的完整路径  
+$gmxMdrunPath = "D:\gmx\gmx2020.6_GPU\bin\gmx.exe"  
+
+# gmx mdrun命令模板  
+$gmxCommand = "& `"$gmxMdrunPath`" mdrun -s `"{0}\md.tpr`" -cpi `"{0}\md.cpt`" -deffnm `"{0}\md`" -v -nb gpu -pme gpu -notunepme -ntmpi 1 -ntomp 16 -gpu_id 1"  
+  
+
+# 用来跟踪gmx mdrun命令的进程ID的变量
+$gmxProcessId =$null
+
+# 函数：执行gmx mdrun命令  
+function ExecuteGmxMdrun() {  
+    # 启动进程并存储其ID  
+    $process = Start-Process -FilePath "powershell" -ArgumentList "-Command$gmxCommand" -PassThru -NoNewWindow
+    $global:gmxProcessId =$process.Id  
+    Write-Host "启动 gmx mdrun 命令，进程ID: $gmxProcessId"  
+}  
+
+function StopGmxMdrun() {  
+    # 停止进程  
+    if ($gmxProcessId) {  
+        # 尝试发送CTRL+C信号给进程  
+        try {  
+            # 定义C#代码来调用GenerateConsoleCtrlEvent  
+            $code = @"  
+using System;  
+using System.Runtime.InteropServices;  
+  
+public class CtrlCSender {  
+    [DllImport("kernel32.dll")]  
+    private static extern bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);  
+  
+    private const uint CTRL_C_EVENT = 0;  
+  
+    public static bool SendCtrlC(int processId) {  
+        return GenerateConsoleCtrlEvent(CTRL_C_EVENT, (uint)processId);  
+    }  
+}  
+"@  
+  
+            # 添加C#代码类型到PowerShell会话中  
+            Add-Type -TypeDefinition $code -Language CSharp  
+  
+            # 发送CTRL+C信号  
+            [CtrlCSender]::SendCtrlC($gmxProcessId)  
+  
+            # 等待进程自行退出，或者进行强制终止  
+            Start-Sleep -Seconds 2 # 等待一段时间让进程响应CTRL+C信号  
+            $process = Get-Process -Id$gmxProcessId -ErrorAction SilentlyContinue  
+            if ($process) {  
+                # 如果进程仍在运行，则强制终止它  
+                $process.Kill()  
+                Write-Host "强制停止了 gmx mdrun 命令，进程ID: $gmxProcessId"  
+            } else {  
+                Write-Host "通过CTRL+C停止了 gmx mdrun 命令，进程ID: $gmxProcessId"  
+            }  
+        } catch {  
+            Write-Error "发送CTRL+C信号或停止进程时出错：$_"  
+        } finally {  
+            # 重置进程ID  
+            $global:gmxProcessId =$null  
+        }  
+    }  
+}  
+
+# 无限循环来检查GPU温度并执行命令  
+while ($true) {  
+$n++ # 增加计数器
+    Write-Host "循环次数: $n" # 输出循环次数
+    try {  
+        # 调用nvidia-smi并获取GPU温度（这里假设只检查第一块GPU）  
+        $temperature = (nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits -i 1) -replace "\s+",""  
+        $gpuTemp = [int]$temperature  
+  
+               # 如果温度低于阈值且gmx mdrun未在运行，则启动它
+        if ($gpuTemp -lt$tempThreshold -and $null -eq$gmxProcessId) {
+            ExecuteGmxMdrun
+        }
+        # 如果温度高于或等于阈值且gmx mdrun正在运行，则停止它并发送邮件
+        elseif ($gpuTemp -ge$tempThreshold -and $null -ne$gmxProcessId) {
+            $smtp.Send($mail)
+            StopGmxMdrun
+        }
+
+        # 等待指定的时间间隔
+        Start-Sleep -Seconds $interval
+    } catch {
+        # 异常处理
+        Write-Error "发生错误: $_"
+        # 可以选择在这里发送错误邮件通知
+    }
+}

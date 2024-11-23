@@ -1,0 +1,29 @@
+# 输入父文件夹路径
+$parentFolderPath = Read-Host "请输入父文件夹的路径"
+
+# 检查路径是否存在
+if (-Not (Test-Path -Path $parentFolderPath)) {
+    Write-Host "指定的路径不存在，请检查后重新运行脚本。"
+    exit
+}
+
+# 获取所有二级文件夹
+$secondLevelFolders = Get-ChildItem -Path $parentFolderPath -Directory
+
+# 遍历每个二级文件夹
+foreach ($folder in $secondLevelFolders) {
+    # 获取当前二级文件夹内的所有子文件夹
+    $subFolders = Get-ChildItem -Path $folder.FullName -Directory -Recurse
+    
+    # 遍历每个子文件夹
+    foreach ($subFolder in $subFolders) {
+        # 替换子文件夹名称中的空格为下划线
+        $newName =$subFolder.Name -replace " ", "_"
+        
+        # 如果新名称与旧名称不同，则重命名文件夹
+        if ($subFolder.Name -ne $newName) {
+            Rename-Item -Path $subFolder.FullName -NewName $newName
+            Write-Host "重命名文件夹：'$($subFolder.FullName)' 为 '$newName'"
+        }
+    }
+}

@@ -1,0 +1,51 @@
+# 抽帧：选0(system)
+echo "0" | gmx trjconv -s md.tpr -f md.xtc -o md_noPBC.xtc -pbc mol -ur compact -n -skip 100
+
+# 拆成gro：选17（non-water），如果报错找不到md.gro，改为nvt.gro
+New-Item -ItemType Directory -Force -Path .\traj
+echo "non-wate" | gmx trjconv -f md.xtc -s nvt.gro -sep -o .\traj\traj.gro -skip 100
+
+# 新建一个energy.txt文件
+New-Item -ItemType File -Force -Path .\energy.txt
+
+# 计算基底的能量：前两步选13（mol），最后一步选1,2,3,4
+echo "13" | gmx convert-tpr -s md.tpr -n index.ndx -o md_MOL.tpr
+echo "13" | gmx trjconv -s md.tpr -f md_noPBC.xtc -o md_MOL.xtc -pbc mol -ur compact -n
+gmx mdrun -s md_MOL.tpr -rerun md_MOL.xtc -e enrg_MOL.edr -v -ntmpi 1
+echo "1
+2
+3
+4" | gmx energy -f enrg_MOL.edr -o enrg_MOL.xvg
+Get-Content enrg_MOL.xvg | Select-String -Pattern 'LJ' -Context 0,4 >> .\energy.txt
+
+# 计算蛋白的能量：前两步选1（protein），最后一步对着下表选
+echo "1" | gmx convert-tpr -s md.tpr -n index.ndx -o md_protein.tpr
+echo "1" | gmx trjconv -s md.tpr -f md_noPBC.xtc -o md_protein.xtc -pbc mol -ur compact -n
+gmx mdrun -s md_protein.tpr -rerun md_protein.xtc -e enrg_protein.edr -v -ntmpi 1
+echo "3
+4
+5
+6
+7
+8
+9
+10
+11" | gmx energy -f enrg_protein.edr -o enrg_protein.xvg
+Get-Content enrg_protein.xvg | Select-String -Pattern 'Proper Dih.' -Context 0,9 >> .\energy.txt
+
+# 计算蛋白和基底总共的能量
+echo "1|13
+q" | gmx make_ndx -f em.gro -o index.ndx -n index.ndx
+echo "protein_mol" | gmx convert-tpr -s md.tpr -n index.ndx -o md_pro_MOL.tpr
+echo "protein_mol" | gmx trjconv -s md.tpr -f md_noPBC.xtc -o md_pro_MOL.xtc -pbc mol -ur compact -n
+gmx mdrun -s md_pro_MOL.tpr -rerun md_pro_MOL.xtc -e enrg_pro_MOL.edr -v -ntmpi 1
+echo "3
+4
+5
+6
+7
+8
+9
+10
+11" | gmx energy -f enrg_pro_MOL.edr -o enrg_pro_MOL.xvg
+Get-Content enrg_pro_MOL.xvg | Select-String -Pattern 'Proper Dih.' -Context 0,9 >> .\energy.txt
